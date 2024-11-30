@@ -6,9 +6,9 @@
         <flag eulerdamp="disable" />
     </option> -->
 
-    <option iterations="2" ls_iterations="5">
+    <!-- <option iterations="2" ls_iterations="5">
         <flag eulerdamp="disable" />
-    </option>
+    </option> -->
 
     <default>
         <default class="go2">

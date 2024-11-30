@@ -27,6 +27,9 @@ class BaseEnv(PipelineEnv):
         # number of everything
         self._nv = self.sys.nv
         self._nq = self.sys.nq
+        
+        self.num_actions = self.joint_range.shape[0]
+
 
     def make_system(self, config: BaseEnvConfig) -> System:
         """

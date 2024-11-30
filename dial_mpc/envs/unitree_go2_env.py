@@ -63,22 +63,53 @@ class UnitreeGo2Env(BaseEnv):
         self._init_q = jnp.array(self.sys.mj_model.keyframe("home").qpos)
         self._default_pose = self.sys.mj_model.keyframe("home").qpos[7:]
 
+        # self.joint_range = jnp.array(
+        #     [
+        #         [-0.5, 0.5],
+        #         [0.4, 1.4],
+        #         [-2.3, -0.85],
+        #         [-0.5, 0.5],
+        #         [0.4, 1.4],
+        #         [-2.3, -0.85],
+        #         [-0.5, 0.5],
+        #         [0.4, 1.4],
+        #         [-2.3, -1.3],
+        #         [-0.5, 0.5],
+        #         [0.4, 1.4],
+        #         [-2.3, -1.3],
+        #     ]
+        # )
+        
         self.joint_range = jnp.array(
             [
-                [-0.5, 0.5],
-                [0.4, 1.4],
-                [-2.3, -0.85],
-                [-0.5, 0.5],
-                [0.4, 1.4],
-                [-2.3, -0.85],
-                [-0.5, 0.5],
-                [0.4, 1.4],
-                [-2.3, -1.3],
-                [-0.5, 0.5],
-                [0.4, 1.4],
-                [-2.3, -1.3],
+                [-.8, .8],
+                [-1.2, 3.],
+                [-2.3, -0.82],
+                [-.8, .8],
+                [-1.2, 3.],
+                [-2.3, -0.82],
+                [-.8, .8],
+                [-1.2, 3.],
+                [-2.3, -0.82],
+                [-.8, .8],
+                [-1.2, 3.],
+                [-2.3, -0.82],
             ]
         )
+        
+        # joint_range [[-1.0472   1.0472 ]
+        #     [-1.5708   3.4907 ]
+        #     [-2.7227  -0.83776]
+        #     [-1.0472   1.0472 ]
+        #     [-1.5708   3.4907 ]
+        #     [-2.7227  -0.83776]
+        #     [-1.0472   1.0472 ]
+        #     [-0.5236   4.5379 ]
+        #     [-2.7227  -0.83776]
+        #     [-1.0472   1.0472 ]
+        #     [-0.5236   4.5379 ]
+        #     [-2.7227  -0.83776]]
+        
         feet_site = [
             "FL_foot",
             "FR_foot",
@@ -115,6 +146,25 @@ class UnitreeGo2Env(BaseEnv):
             "randomize_target": self._config.randomize_tasks,
             "last_contact": jnp.zeros(4, dtype=jnp.bool),
             "feet_air_time": jnp.zeros(4),
+            "last_ctrl": jnp.zeros(12),
+            "head_pos": jnp.array([0., 0.0, 0.0]),
+            
+            "reward_gaits": 0.0,
+            "reward_air_time": 0.0,
+            "reward_pos": 0.0,
+            "reward_upright": 0.0,
+            "reward_yaw": 0.0,
+            "reward_vel": 0.0,
+            "reward_ang_vel": 0.0,
+            "reward_height": 0.0,
+            "reward_energy": 0.0,
+            "reward_alive": 0.0,
+            "reward_dof_vel": 0.0,
+            "reward_dof_pos_limit": 0.0,
+            "reward_ctrl_rate": 0.0,
+            
+            "debug_vb": jnp.zeros(3),
+            
         }
 
         obs = self._get_obs(pipeline_state, state_info)
@@ -153,15 +203,28 @@ class UnitreeGo2Env(BaseEnv):
             randomize,
             dont_randomize,
         )
-        state.info["vel_tar"] = jnp.minimum(
-            vel_tar * state.info["step"] * self.dt / self._config.ramp_up_time, vel_tar
-        )
+        # state.info["vel_tar"] = jnp.minimum(
+        #     vel_tar * state.info["step"] * self.dt / self._config.ramp_up_time, vel_tar
+        # )
+        state.info["vel_tar"] = state.info["vel_tar"].at[0].set(1.0)
         state.info["ang_vel_tar"] = jnp.minimum(
             ang_vel_tar * state.info["step"] * self.dt / self._config.ramp_up_time,
             ang_vel_tar,
         )
+        state.info["ang_vel_tar"] = state.info["ang_vel_tar"] * 0.0
 
+        # control rate reward
+        reward_ctrl_rate = -jnp.sum((ctrl - state.info["last_ctrl"]) ** 2)
         # reward
+        # dof_pos_limit
+        # dof_pos = pipeline_state.qpos[6:]
+        # print(dof_pos.shape)
+        # out_of_limits = -(dof_pos - self.joint_range[:, 0]).clip(max=0.) # lower limit
+        # out_of_limits += (dof_pos - self.joint_range[:, 1]).clip(min=0.)
+        reward_dof_pos_limit = 0.
+        # dof_vel
+        dof_vel = pipeline_state.qvel[6:]
+        reward_dof_vel = -jnp.sum(jnp.square(dof_vel))
         # gaits reward
         z_feet = pipeline_state.site_xpos[self._feet_site_id][:, 2]
         duty_ratio, cadence, amplitude = self._gait_params[self._gait]
@@ -224,28 +287,82 @@ class UnitreeGo2Env(BaseEnv):
         # stay alive reward
         reward_alive = 1.0 - state.done
         # reward
+        # reward = (
+        #     reward_gaits * 0.1
+        #     + reward_air_time * 0.0
+        #     + reward_pos * 0.0
+        #     + reward_upright * 0.5
+        #     + reward_yaw * 0.3
+        #     # + reward_pose * 0.0
+        #     + reward_vel * 1.0
+        #     + reward_ang_vel * 1.0
+        #     + reward_height * 1.0
+        #     + reward_energy * 0.00
+        #     + reward_alive * 0.0
+        # )
+        
+        ## Reweard for RL
+        
+        reward_vel = jnp.exp(-jnp.sum((vb[:2] - state.info["vel_tar"][:2]) ** 2) / 0.1)
+        reward_ang_vel = jnp.exp(-jnp.sum((ab[2] - state.info["ang_vel_tar"][2]) ** 2) / 0.1)
+        reward_height = jnp.exp(-jnp.sum((x.pos[self._torso_idx - 1, 2] - state.info["pos_tar"][2]) ** 2) / 0.05)
+        reward_upright = jnp.exp(-jnp.sum(jnp.square(vec - vec_tar)) / 0.1)
+        # reward_yaw = jnp.exp( -jnp.square(yaw - yaw_tar) / 0.25)
+        
+        w_gaits = 0.001
+        w_air_time = 1.0
+        w_pos = 0.0
+        w_upright = 0.05
+        w_yaw = 0.
+        w_vel = 1.
+        w_ang_vel = .1
+        w_height = 0.1
+        w_energy = 0.
+        w_alive = 0.0
+        w_dof_vel = 0.
+        w_dof_pos_limit = 0.
+        w_ctrl_rate = 1e-6
+        
+        
         reward = (
-            reward_gaits * 0.1
-            + reward_air_time * 0.0
-            + reward_pos * 0.0
-            + reward_upright * 0.5
-            + reward_yaw * 0.3
-            # + reward_pose * 0.0
-            + reward_vel * 1.0
-            + reward_ang_vel * 1.0
-            + reward_height * 1.0
-            + reward_energy * 0.00
-            + reward_alive * 0.0
+            reward_gaits * w_gaits
+            + reward_air_time * w_air_time
+            + reward_pos * w_pos
+            + reward_upright * w_upright
+            + reward_yaw * w_yaw
+            + reward_vel * w_vel
+            + reward_ang_vel * w_ang_vel
+            + reward_height * w_height
+            + reward_energy * w_energy
+            + reward_alive * w_alive
+            + reward_dof_vel * w_dof_vel
+            + reward_dof_pos_limit * w_dof_pos_limit
+            + reward_ctrl_rate * w_ctrl_rate
         )
-
+                
+        # reward = reward.clip(-100., jnp.inf)
+        # reward = reward.at[jnp.where(jnp.isnan(reward))].set( -100. )
         # done
+        rpy = math.quat_to_euler(x.rot[self._torso_idx - 1])
         up = jnp.array([0.0, 0.0, 1.0])
         joint_angles = pipeline_state.q[7:]
-        done = jnp.dot(math.rotate(up, x.rot[self._torso_idx - 1]), up) < 0
-        done |= jnp.any(joint_angles < self.joint_range[:, 0])
-        done |= jnp.any(joint_angles > self.joint_range[:, 1])
+        # done = jnp.any(joint_angles < self.joint_range[:, 0] * 0.9)
+        # done |= jnp.any(joint_angles > self.joint_range[:, 1] * 0.9)
+        done = state.info["step"] > 500
+        # done |= jnp.dot(math.rotate(up, x.rot[self._torso_idx - 1]), up) < 0
         done |= pipeline_state.x.pos[self._torso_idx - 1, 2] < 0.18
+        # done |= jnp.any(pipeline_state.x.pos[:, 2] > 0.2)
+        
+        ## term
+        # done |= jnp.any(pipeline_state.x.pos[:, 2] < 0.)
+        done |= jnp.abs(rpy[0]) > 1.
+        done |= jnp.abs(rpy[1]) > 1.
+        
+        # done |= jnp.max(jnp.abs(dof_vel)) > 100.0
         done = done.astype(jnp.float32)
+        
+        rng, cmd_rng = jax.random.split(rng, 2)
+        state_init = self.reset(cmd_rng)
 
         # state management
         state.info["step"] += 1
@@ -254,11 +371,40 @@ class UnitreeGo2Env(BaseEnv):
         state.info["z_feet_tar"] = z_feet_tar
         state.info["feet_air_time"] *= ~contact_filt_mm
         state.info["last_contact"] = contact
+        state.info["head_pos"] = head_pos
+        state.info["last_ctrl"] = ctrl
+        
 
         state = state.replace(
             pipeline_state=pipeline_state, obs=obs, reward=reward, done=done
         )
-        return state
+        
+        state_ret = jax.lax.cond(done, lambda x: state_init, lambda x: state, done)
+        
+        state_ret = state_ret.replace(
+            reward = reward,
+            done = done,
+            obs = obs,
+        )
+        
+        state_ret.info["reward_gaits"] = reward_gaits * w_gaits
+        state_ret.info["reward_air_time"] = reward_air_time * w_air_time
+        state_ret.info["reward_pos"] = reward_pos * w_pos
+        state_ret.info["reward_upright"] = reward_upright * w_upright
+        state_ret.info["reward_yaw"] = reward_yaw * w_yaw
+        state_ret.info["reward_vel"] = reward_vel * w_vel
+        state_ret.info["reward_ang_vel"] = reward_ang_vel * w_ang_vel
+        state_ret.info["reward_height"] = reward_height * w_height
+        state_ret.info["reward_energy"] = reward_energy * w_energy
+        state_ret.info["reward_alive"] = reward_alive * w_alive
+        state_ret.info["reward_dof_vel"] = reward_dof_vel * w_dof_vel
+        state_ret.info["reward_dof_pos_limit"] = reward_dof_pos_limit * w_dof_pos_limit
+        state_ret.info["reward_ctrl_rate"] = reward_ctrl_rate * w_ctrl_rate
+        
+        state_ret.info["debug_vb"] = vb
+        
+        
+        return state_ret
 
     def _get_obs(
         self,
@@ -782,6 +928,9 @@ class UnitreeGo2CrateEnv(UnitreeGo2Env):
             - penalty_contact * 0.0
         )
         # jax.debug.print("{geom}", geom=pipeline_state.contact.geom)
+        
+        # done |= state.info["step"] > 400
+        # done = done.astype(jnp.float32)
 
         # state management
         state.info["step"] += 1
