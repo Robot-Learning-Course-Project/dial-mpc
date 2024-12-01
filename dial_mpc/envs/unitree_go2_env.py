@@ -25,7 +25,7 @@ from dial_mpc.utils.io_utils import get_model_path
 @dataclass
 class UnitreeGo2EnvConfig(BaseEnvConfig):
     kp: Union[float, jax.Array] = 30.0
-    kd: Union[float, jax.Array] = 0.0
+    kd: Union[float, jax.Array] = 0.5
     default_vx: float = 1.0
     default_vy: float = 0.0
     default_vyaw: float = 0.0
@@ -67,17 +67,8 @@ class UnitreeGo2Env(BaseEnv):
             [
                 [-0.5, 0.5],
                 [0.4, 1.4],
-                [-2.3, -0.85],
-                [-0.5, 0.5],
-                [0.4, 1.4],
-                [-2.3, -0.85],
-                [-0.5, 0.5],
-                [0.4, 1.4],
                 [-2.3, -1.3],
-                [-0.5, 0.5],
-                [0.4, 1.4],
-                [-2.3, -1.3],
-            ]
+            ] * 4
         )
         feet_site = [
             "FL_foot",
@@ -93,9 +84,16 @@ class UnitreeGo2Env(BaseEnv):
         self._feet_site_id = jnp.array(feet_site_id)
 
     def make_system(self, config: UnitreeGo2EnvConfig) -> System:
-        model_path = get_model_path("unitree_go2", "mjx_scene_force.xml")
+        # model_path = get_model_path("unitree_go2", "mjx_scene_force.xml")
+        model_path = get_model_path("unitree_go2", "mjx_scene_position.xml")
         sys = mjcf.load(model_path)
         sys = sys.tree_replace({"opt.timestep": config.timestep})
+        # sys = sys.replace(
+        #     dof_damping=sys.dof_damping.at[6:].set(0.5239),
+        #     actuator_gainprm=sys.actuator_gainprm.at[:, 0].set(35.0),
+        #     actuator_biasprm=sys.actuator_biasprm.at[:, 1].set(-35.0),
+        # )
+        
         return sys
 
     def reset(self, rng: jax.Array) -> State:  # pytype: disable=signature-mismatch
@@ -228,13 +226,13 @@ class UnitreeGo2Env(BaseEnv):
             reward_gaits * 0.1
             + reward_air_time * 0.0
             + reward_pos * 0.0
-            + reward_upright * 0.5
-            + reward_yaw * 0.3
+            + reward_upright * 5.
+            + reward_yaw * 1.
             # + reward_pose * 0.0
             + reward_vel * 1.0
             + reward_ang_vel * 1.0
             + reward_height * 1.0
-            + reward_energy * 0.00
+            + reward_energy * 0.01
             + reward_alive * 0.0
         )
 
@@ -274,8 +272,8 @@ class UnitreeGo2Env(BaseEnv):
         )
         obs = jnp.concatenate(
             [
-                state_info["vel_tar"],
-                state_info["ang_vel_tar"],
+                state_info["vel_tar"][:2],
+                state_info["ang_vel_tar"][2:3],
                 pipeline_state.ctrl,
                 pipeline_state.qpos,
                 vb,
@@ -283,6 +281,7 @@ class UnitreeGo2Env(BaseEnv):
                 pipeline_state.qvel[6:],
             ]
         )
+        
         return obs
 
     def render(
