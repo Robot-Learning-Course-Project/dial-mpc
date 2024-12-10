@@ -119,7 +119,8 @@ class MBDPI:
         rewss, valuess, pipeline_statess = self.rollout_us_vmap(state, us)
 
         # 1. replace cost with value
-        rewss = valuess
+        if self.args.value_as_reward:
+            rewss = valuess
         # 2. replace last step of cost with value
         # rewss = rewss.at[:, -1].set(valuess[:, -1])
         # rewss = rewss.at[:, -16:].set(valuess[:, -16:])
@@ -229,8 +230,7 @@ def main():
 
     print(emoji.emojize(":rocket:") + "Creating environment")
     # env = brax_envs.get_environment(dial_config.env_name, config=env_config)
-    
-    env = UnitreeGo2EnvRL(deploy=True, action_scale=1.,dial_action_space=True, get_value=True)
+    env = UnitreeGo2EnvRL(deploy=True, action_scale=1.,dial_action_space=True, get_value=True, value_path=config_dict['value_path'])
     reset_env = jax.jit(env.reset)
     step_env = jax.jit(env.step)
     mbdpi = MBDPI(dial_config, env)

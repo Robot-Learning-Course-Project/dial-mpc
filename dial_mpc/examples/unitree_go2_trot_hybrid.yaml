@@ -28,4 +28,5 @@ ramp_up_time: 1.0
 gait: trot
 
 # Ours
-value_path: brax_go2/Dec02_14-52-19_walk/go2_value
+value_as_reward: true
+value_path: brax_go2/ppo/Dec10_13-18-53_walk/value_step100270080
