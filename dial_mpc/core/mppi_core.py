@@ -58,14 +58,8 @@ class MBDPI:
             "mppi": softmax_update,
         }[args.update_method]
 
-        sigma0 = 1e-2
-        sigma1 = 1.0
-        A = sigma0
-        B = jnp.log(sigma1 / sigma0) / args.Ndiffuse
-        self.sigmas = A * jnp.exp(B * jnp.arange(args.Ndiffuse))
-        self.sigma_control = (
-            args.horizon_diffuse_factor ** jnp.arange(args.Hnode + 1)[::-1]
-        )
+        self.sigmas = jnp.array([1.0])
+        self.sigma_control = jnp.array([1.0])
 
         # node to u
         self.ctrl_dt = 0.02
@@ -99,60 +93,27 @@ class MBDPI:
 
     @functools.partial(jax.jit, static_argnums=(0,))
     def reverse_once(self, state, rng, Ybar_i, noise_scale):
-        # sample from q_i
         rng, Y0s_rng = jax.random.split(rng)
-        eps_Y = jax.random.normal(
-            Y0s_rng, (self.args.Nsample, self.args.Hnode + 1, self.nu)
-        )
+        eps_Y = jax.random.normal(Y0s_rng, (self.args.Nsample, self.args.Hnode + 1, self.nu))
         Y0s = eps_Y * noise_scale[None, :, None] + Ybar_i
-        # we can't change the first control
-        Y0s = Y0s.at[:, 0].set(Ybar_i[0, :])
-        # append Y0s with Ybar_i to also evaluate Ybar_i
-        Y0s = jnp.concatenate([Y0s, Ybar_i[None]], axis=0)
         Y0s = jnp.clip(Y0s, -1.0, 1.0)
-        # convert Y0s to us
+        
         us = self.node2u_vvmap(Y0s)
+        rewss, _ = self.rollout_us_vmap(state, us)
 
-        # esitimate mu_0tm1
-        rewss, pipeline_statess = self.rollout_us_vmap(state, us)
-        rew_Ybar_i = rewss[-1].mean()
-        qss = pipeline_statess.q
-        qdss = pipeline_statess.qd
-        xss = pipeline_statess.x.pos
-        rews = rewss.mean(axis=-1)
-        logp0 = (rews - rew_Ybar_i) / rews.std(axis=-1) / self.args.temp_sample
+        logp = rewss.mean(axis=-1) / self.args.temp_sample
+        weights = jax.nn.softmax(logp)
 
-        weights = jax.nn.softmax(logp0)
-        Ybar, new_noise_scale = self.update_fn(weights, Y0s, noise_scale, Ybar_i)
-
-        # NOTE: update only with reward
         Ybar = jnp.einsum("n,nij->ij", weights, Y0s)
-        qbar = jnp.einsum("n,nij->ij", weights, qss)
-        qdbar = jnp.einsum("n,nij->ij", weights, qdss)
-        xbar = jnp.einsum("n,nijk->ijk", weights, xss)
 
         info = {
-            "rews": rews,
-            "qbar": qbar,
-            "qdbar": qdbar,
-            "xbar": xbar,
-            "new_noise_scale": new_noise_scale,
+            "rews": rewss.mean(axis=-1),
         }
 
         return rng, Ybar, info
 
     def reverse(self, state, YN, rng):
-        Yi = YN
-        with tqdm(range(self.args.Ndiffuse - 1, 0, -1), desc="Diffusing") as pbar:
-            for i in pbar:
-                t0 = time.time()
-                rng, Yi, rews = self.reverse_once(
-                    state, rng, Yi, self.sigmas[i] * jnp.ones(self.args.Hnode + 1)
-                )
-                Yi.block_until_ready()
-                freq = 1 / (time.time() - t0)
-                pbar.set_postfix({"rew": f"{rews.mean():.2e}", "freq": f"{freq:.2f}"})
-        return Yi
+        return YN
 
     @functools.partial(jax.jit, static_argnums=(0,))
     def shift(self, Y):
@@ -237,6 +198,7 @@ def main():
     us = []
     infos = []
     observations = []
+
     with tqdm(range(Nstep), desc="Rollout") as pbar:
         for t in pbar:
             # forward single step
@@ -252,19 +214,20 @@ def main():
             if t == 0:
                 n_diffuse = dial_config.Ndiffuse_init
                 print("Performing JIT on DIAL-MPC")
+                print("hello...")
 
             t0 = time.time()
-            traj_diffuse_factors = (
-                mbdpi.sigma_control * dial_config.traj_diffuse_factor ** (jnp.arange(n_diffuse))[:, None]
-            )
+            # Vanilla MPPI update without diffusion or reverse steps
             (rng, Y0, _), info = jax.lax.scan(
-                reverse_scan, (rng, Y0, state), traj_diffuse_factors
+                reverse_scan, (rng, Y0, state), jnp.ones(n_diffuse)[:, None]
             )
+
             rews_plan.append(info["rews"][-1].mean())
             infos.append(info)
             freq = 1 / (time.time() - t0)
             pbar.set_postfix({"rew": f"{state.reward:.2e}", "freq": f"{freq:.2f}"})
             observations.append(state.obs)
+
 
     rew = jnp.array(rews).mean()
     print(f"mean reward = {rew:.2e}")
@@ -317,7 +280,7 @@ def main():
                 ]
             )
         )
-        xdata.append(infos[i]["xbar"][-1])
+        # xdata.append(infos[i]["xbar"][-1])
     data = jnp.array(data)
     xdata = jnp.array(xdata)
     jnp.save(os.path.join(dial_config.output_dir, f"{timestamp}_states"), data)
@@ -327,8 +290,9 @@ def main():
     def index():
         return webpage
 
-    app.run(port=5000)
+    app.run(port=5005)
 
 
 if __name__ == "__main__":
+    # python dial_mpc/core/mppi_core.py --example unitree_h1_jog
     main()

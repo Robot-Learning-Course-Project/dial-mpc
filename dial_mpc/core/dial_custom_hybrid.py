@@ -251,6 +251,7 @@ def main():
     state = state_init
     us = []
     infos = []
+    observations = []
     with tqdm(range(Nstep), desc="Rollout") as pbar:
         for t in pbar:
             # forward single step
@@ -280,6 +281,7 @@ def main():
             infos.append(info)
             freq = 1 / (time.time() - t0)
             pbar.set_postfix({"rew": f"{state.reward:.2e}", "freq": f"{freq:.2f}"})
+            observations.append(state.obs)
             # print(f"step: {t}, reward: {state.reward:.3f}, time: {time.time() - t0}, done: {state.done}")
             # print(f"reward terms: {state.info['rewards']}")
             # if state.done:
@@ -298,6 +300,8 @@ def main():
         os.makedirs(dial_config.output_dir)
 
     timestamp = time.strftime("%Y%m%d-%H%M%S")
+    observations = jnp.array(observations)
+    jnp.save(os.path.join(dial_config.output_dir, f"{timestamp}_observations"), observations)
 
     # plot rews_plan
     # plt.plot(rews_plan)
